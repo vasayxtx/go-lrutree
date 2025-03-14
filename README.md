@@ -46,11 +46,12 @@ type OrgItem struct {
 }
 
 func main() {
-	// Create a new cache with a maximum of 100 entries
+	// Create a new cache with a maximum size of 4 entries and an eviction callback
 	cache := lrutree.NewCache[string, OrgItem](4, lrutree.WithOnEvict(func(key string, value OrgItem) {
 		fmt.Printf("Node %s evicted", key)
 	}))
 
+	// Add nodes to the cache
 	_ = cache.AddRoot("company", OrgItem{"Acme Corp"})
 	_ = cache.Add("engineering", OrgItem{"Engineering department"}, "company")
 	_ = cache.Add("frontend", OrgItem{"Frontend team"}, "engineering")
@@ -63,7 +64,7 @@ func main() {
 	}
 	fmt.Println("-------------------")
 
-	// Get the branch by key
+	// Get the full branch from the root to the node with key "backend"
 	branch := cache.GetBranch("backend")
 	for _, item := range branch {
 		fmt.Println(item.Value.Name)
