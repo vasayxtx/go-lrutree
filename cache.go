@@ -233,6 +233,41 @@ func (c *Cache[K, V]) AddOrUpdate(key K, val V, parentKey K) error {
 	return nil
 }
 
+// BranchNode represents a node in a branch path from root to a specific node
+type BranchNode[K comparable, V any] struct {
+	Key   K
+	Value V
+}
+
+// GetBranch returns the path from the root to the specified key as a slice of BranchNodes.
+//
+// The returned slice is ordered from root (index 0) to the target node (last index).
+// If the key does not exist, an empty slice is returned.
+// Method updates LRU order for all nodes in the branch.
+func (c *Cache[K, V]) GetBranch(key K) []BranchNode[K, V] {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	node, exists := c.m[key]
+	if !exists {
+		return nil
+	}
+
+	depth := 0
+	for n := node; n != nil; n = n.parent {
+		depth++
+	}
+	branch := make([]BranchNode[K, V], depth)
+	i := depth
+	for n := node; n != nil; n = n.parent {
+		i--
+		branch[i] = BranchNode[K, V]{Key: n.key, Value: n.val}
+		c.lruList.MoveToFront(n.lruElem)
+	}
+
+	return branch
+}
+
 // TraverseToRoot walks the path from the specified node up to the root node,
 // calling the provided function for each node along the way.
 //

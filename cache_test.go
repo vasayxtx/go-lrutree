@@ -290,6 +290,43 @@ func TestCache_AddOrUpdate(t *testing.T) {
 	})
 }
 
+func TestCache_GetBranch(t *testing.T) {
+	t.Run("key exists", func(t *testing.T) {
+		cache := NewCache[string, int](10)
+		require.NoError(t, cache.AddRoot("root", 1))
+		require.NoError(t, cache.Add("child1", 2, "root"))
+		require.NoError(t, cache.Add("grandchild1", 3, "child1"))
+		require.NoError(t, cache.Add("child2", 4, "root"))
+		require.NoError(t, cache.Add("grandchild2", 5, "child2"))
+		require.Equal(t, []string{"root", "child2", "grandchild2", "child1", "grandchild1"}, getLRUOrder(cache))
+
+		require.Equal(t, []BranchNode[string, int]{
+			{"root", 1},
+			{"child1", 2},
+			{"grandchild1", 3},
+		}, cache.GetBranch("grandchild1"))
+		require.Equal(t, []string{"root", "child1", "grandchild1", "child2", "grandchild2"}, getLRUOrder(cache))
+	})
+
+	t.Run("key is root", func(t *testing.T) {
+		cache := NewCache[string, int](10)
+		require.NoError(t, cache.AddRoot("root", 1))
+		require.NoError(t, cache.Add("level1", 2, "root"))
+		require.Equal(t, []BranchNode[string, int]{{"root", 1}}, cache.GetBranch("root"))
+	})
+
+	t.Run("key doesn't exist", func(t *testing.T) {
+		cache := NewCache[string, int](10)
+		require.NoError(t, cache.AddRoot("root", 1))
+		require.Empty(t, cache.GetBranch("nonexistent"))
+	})
+
+	t.Run("empty cache", func(t *testing.T) {
+		cache := NewCache[string, int](10)
+		require.Empty(t, cache.GetBranch("anything"))
+	})
+}
+
 func TestCache_TraverseToRoot(t *testing.T) {
 	t.Run("key not found", func(t *testing.T) {
 		cache := NewCache[string, int](10)
