@@ -302,22 +302,49 @@ func (c *Cache[K, V]) TraverseToRoot(key K, f func(key K, val V, parentKey K)) {
 	}
 }
 
+// TraverseSubtreeOption represents options for the TraverseSubtree method.
+type TraverseSubtreeOption func(*traverseOptions)
+
+// WithMaxDepth limits the depth of traversal in TraverseSubtree.
+// A depth of -1 means unlimited depth (traverse the entire subtree).
+// A depth of 0 means only the specified node (no children).
+// A depth of 1 means the node and its immediate children, and so on.
+func WithMaxDepth(depth int) TraverseSubtreeOption {
+	return func(opts *traverseOptions) {
+		opts.maxDepth = depth
+	}
+}
+
+type traverseOptions struct {
+	maxDepth int // -1 means unlimited
+}
+
 // TraverseSubtree performs a depth-first traversal of all nodes in the subtree
-// rooted at the specified node.
+// rooted at the specified node, with optional depth limitation.
 //
 // This method visits the specified node and all its descendants in a pre-order depth-first traversal.
 // Each node visited is marked as recently used.
 // The provided callback function receives the node's key, value, and its parent's key.
 //
+// Options:
+//   - WithMaxDepth(n): Limits traversal to n levels deep.
+//
 // Note: This operation is performed under a lock and will block other cache operations.
 // For large subtrees, this can have performance implications.
-func (c *Cache[K, V]) TraverseSubtree(key K, f func(key K, val V, parentKey K)) {
+func (c *Cache[K, V]) TraverseSubtree(key K, f func(key K, val V, parentKey K), options ...TraverseSubtreeOption) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	node, exists := c.m[key]
 	if !exists {
 		return
+	}
+
+	opts := traverseOptions{
+		maxDepth: -1, // Default: unlimited depth
+	}
+	for _, opt := range options {
+		opt(&opts)
 	}
 
 	defer func() {
@@ -327,19 +354,25 @@ func (c *Cache[K, V]) TraverseSubtree(key K, f func(key K, val V, parentKey K)) 
 		}
 	}()
 
-	var iterate func(n *cacheNode[K, V])
-	iterate = func(n *cacheNode[K, V]) {
+	var traverse func(n *cacheNode[K, V], currentDepth int)
+	traverse = func(n *cacheNode[K, V], currentDepth int) {
 		defer c.lruList.MoveToFront(n.lruElem)
 		var parentKey K
 		if n.parent != nil {
 			parentKey = n.parent.key
 		}
 		f(n.key, n.val, parentKey)
+
+		// Check if we need to continue traversing deeper
+		if opts.maxDepth >= 0 && currentDepth >= opts.maxDepth {
+			return
+		}
+
 		for _, child := range n.children {
-			iterate(child)
+			traverse(child, currentDepth+1)
 		}
 	}
-	iterate(node)
+	traverse(node, 0) // Start at depth 0 (root of subtree)
 }
 
 // Remove deletes a node and all its descendants from the cache.
