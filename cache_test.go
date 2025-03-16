@@ -516,6 +516,125 @@ func TestCache_TraverseSubtree(t *testing.T) {
 	})
 }
 
+func TestCache_TraverseSubtree_WithMaxDepth(t *testing.T) {
+	t.Run("with unlimited depth", func(t *testing.T) {
+		cache := NewCache[string, int](10)
+		require.NoError(t, cache.AddRoot("root", 1))
+		require.NoError(t, cache.Add("child1", 2, "root"))
+		require.NoError(t, cache.Add("child2", 3, "root"))
+		require.NoError(t, cache.Add("grandchild1", 4, "child1"))
+		require.NoError(t, cache.Add("grandchild2", 5, "child2"))
+		require.NoError(t, cache.Add("greatgrandchild1", 6, "grandchild1"))
+
+		var traversed []traversedItem[string, int]
+		cache.TraverseSubtree("root", func(key string, val int, parentKey string) {
+			traversed = append(traversed, traversedItem[string, int]{key: key, value: val, parentKey: parentKey})
+		})
+
+		// Expected depth-first order: root, child1, grandchild1, greatgrandchild1, child2, grandchild2
+		require.Equal(t, []traversedItem[string, int]{
+			{key: "root", value: 1, parentKey: ""},
+			{key: "child1", value: 2, parentKey: "root"},
+			{key: "grandchild1", value: 4, parentKey: "child1"},
+			{key: "greatgrandchild1", value: 6, parentKey: "grandchild1"},
+			{key: "child2", value: 3, parentKey: "root"},
+			{key: "grandchild2", value: 5, parentKey: "child2"},
+		}, traversed)
+		require.Equal(t, []string{"root", "child2", "grandchild2", "child1", "grandchild1", "greatgrandchild1"},
+			getLRUOrder(cache))
+	})
+
+	t.Run("with depth 0 - node only", func(t *testing.T) {
+		cache := NewCache[string, int](10)
+		require.NoError(t, cache.AddRoot("root", 1))
+		require.NoError(t, cache.Add("child1", 2, "root"))
+		require.NoError(t, cache.Add("child2", 3, "root"))
+
+		var traversed []traversedItem[string, int]
+		cache.TraverseSubtree("root", func(key string, val int, parentKey string) {
+			traversed = append(traversed, traversedItem[string, int]{key: key, value: val, parentKey: parentKey})
+		}, WithMaxDepth(0))
+
+		// Should only include the root node
+		require.Equal(t, []traversedItem[string, int]{
+			{key: "root", value: 1, parentKey: ""},
+		}, traversed)
+		require.Equal(t, []string{"root", "child2", "child1"}, getLRUOrder(cache))
+	})
+
+	t.Run("with depth 1 - node and immediate children", func(t *testing.T) {
+		cache := NewCache[string, int](10)
+		require.NoError(t, cache.AddRoot("root", 1))
+		require.NoError(t, cache.Add("child1", 2, "root"))
+		require.NoError(t, cache.Add("child2", 3, "root"))
+		require.NoError(t, cache.Add("grandchild1", 4, "child1"))
+		require.NoError(t, cache.Add("grandchild2", 5, "child2"))
+
+		var traversed []traversedItem[string, int]
+		cache.TraverseSubtree("root", func(key string, val int, parentKey string) {
+			traversed = append(traversed, traversedItem[string, int]{key: key, value: val, parentKey: parentKey})
+		}, WithMaxDepth(1))
+
+		// Should include root and its direct children
+		require.Equal(t, []traversedItem[string, int]{
+			{key: "root", value: 1, parentKey: ""},
+			{key: "child1", value: 2, parentKey: "root"},
+			{key: "child2", value: 3, parentKey: "root"},
+		}, traversed)
+		require.Equal(t, []string{"root", "child2", "child1", "grandchild2", "grandchild1"}, getLRUOrder(cache))
+	})
+
+	t.Run("depth 2 - node, children, and grandchildren", func(t *testing.T) {
+		cache := NewCache[string, int](10)
+		require.NoError(t, cache.AddRoot("root", 1))
+		require.NoError(t, cache.Add("child1", 2, "root"))
+		require.NoError(t, cache.Add("child2", 3, "root"))
+		require.NoError(t, cache.Add("grandchild1", 4, "child1"))
+		require.NoError(t, cache.Add("grandchild2", 5, "child2"))
+		require.NoError(t, cache.Add("greatgrandchild1", 6, "grandchild1"))
+
+		var traversed []traversedItem[string, int]
+		cache.TraverseSubtree("root", func(key string, val int, parentKey string) {
+			traversed = append(traversed, traversedItem[string, int]{key: key, value: val, parentKey: parentKey})
+		}, WithMaxDepth(2))
+
+		// Should include root, its children, and grandchildren
+		require.Equal(t, []traversedItem[string, int]{
+			{key: "root", value: 1, parentKey: ""},
+			{key: "child1", value: 2, parentKey: "root"},
+			{key: "grandchild1", value: 4, parentKey: "child1"},
+			{key: "child2", value: 3, parentKey: "root"},
+			{key: "grandchild2", value: 5, parentKey: "child2"},
+		}, traversed)
+		require.Equal(t, []string{"root", "child2", "grandchild2", "child1", "grandchild1", "greatgrandchild1"},
+			getLRUOrder(cache))
+	})
+
+	t.Run("traverse from middle node", func(t *testing.T) {
+		cache := NewCache[string, int](10)
+		require.NoError(t, cache.AddRoot("root", 1))
+		require.NoError(t, cache.Add("child1", 2, "root"))
+		require.NoError(t, cache.Add("child2", 3, "root"))
+		require.NoError(t, cache.Add("grandchild1", 4, "child1"))
+		require.NoError(t, cache.Add("grandchild2", 5, "child1"))
+		require.NoError(t, cache.Add("greatgrandchild1", 6, "grandchild1"))
+
+		var traversed []traversedItem[string, int]
+		cache.TraverseSubtree("child1", func(key string, val int, parentKey string) {
+			traversed = append(traversed, traversedItem[string, int]{key: key, value: val, parentKey: parentKey})
+		}, WithMaxDepth(1))
+
+		// Should include child1 and its direct children
+		require.Equal(t, []traversedItem[string, int]{
+			{key: "child1", value: 2, parentKey: "root"},
+			{key: "grandchild1", value: 4, parentKey: "child1"},
+			{key: "grandchild2", value: 5, parentKey: "child1"},
+		}, traversed)
+		require.Equal(t, []string{"root", "child1", "grandchild2", "grandchild1", "greatgrandchild1", "child2"},
+			getLRUOrder(cache))
+	})
+}
+
 func TestConcurrency(t *testing.T) {
 	cache := NewCache[string, int](100_000)
 	require.NoError(t, cache.AddRoot("root", 1))
