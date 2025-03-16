@@ -32,32 +32,50 @@ type Cache[K comparable, V any] struct {
 	maxEntries int
 	onEvict    func(key K, value V)
 	mu         sync.RWMutex
-	m          map[K]*cacheNode[K, V]
+	keysMap    map[K]*treeNode[K, V]
 	lruList    *list.List
-	root       *cacheNode[K, V]
+	root       *treeNode[K, V]
 }
 
-type cacheNode[K comparable, V any] struct {
+// CacheNode represents a node in the cache with its key, value, and parent key.
+// It is used to return node information from the Cache methods.
+type CacheNode[K comparable, V any] struct {
+	Key       K
+	Value     V
+	ParentKey K
+}
+
+type treeNode[K comparable, V any] struct {
 	key      K
 	val      V
-	parent   *cacheNode[K, V]
-	children []*cacheNode[K, V]
+	parent   *treeNode[K, V]
+	children map[K]*treeNode[K, V]
 	lruElem  *list.Element
 }
 
-func (n *cacheNode[K, V]) removeFromParent() {
+func newTreeNode[K comparable, V any](key K, val V, parent *treeNode[K, V]) *treeNode[K, V] {
+	return &treeNode[K, V]{
+		key:      key,
+		val:      val,
+		parent:   parent,
+		children: make(map[K]*treeNode[K, V]),
+	}
+}
+
+func (n *treeNode[K, V]) removeFromParent() {
 	if n.parent == nil {
 		return
 	}
-	j := 0
-	for i, child := range n.parent.children {
-		n.parent.children[i] = n.parent.children[j]
-		if child != n {
-			j++
-		}
-	}
-	n.parent.children = n.parent.children[:j]
+	delete(n.parent.children, n.key)
 	n.parent = nil
+}
+
+func (n *treeNode[K, V]) parentKey() K {
+	if n.parent != nil {
+		return n.parent.key
+	}
+	var zeroKey K
+	return zeroKey
 }
 
 type CacheOption[K comparable, V any] func(*Cache[K, V])
@@ -72,7 +90,7 @@ func WithOnEvict[K comparable, V any](onEvict func(key K, value V)) CacheOption[
 func NewCache[K comparable, V any](maxEntries int, options ...CacheOption[K, V]) *Cache[K, V] {
 	c := &Cache[K, V]{
 		maxEntries: maxEntries,
-		m:          make(map[K]*cacheNode[K, V]),
+		keysMap:    make(map[K]*treeNode[K, V]),
 		lruList:    list.New(),
 	}
 	for _, opt := range options {
@@ -85,37 +103,35 @@ func NewCache[K comparable, V any](maxEntries int, options ...CacheOption[K, V])
 //
 // This is useful for checking if a value exists without affecting its position in the eviction order.
 // Unlike Get(), this method doesn't mark the node as recently used.
-func (c *Cache[K, V]) Peek(key K) (V, bool) {
+func (c *Cache[K, V]) Peek(key K) (CacheNode[K, V], bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	node, exists := c.m[key]
+	node, exists := c.keysMap[key]
 	if !exists {
-		var zeroVal V
-		return zeroVal, false
+		return CacheNode[K, V]{}, false
 	}
-	return node.val, true
+	return CacheNode[K, V]{Key: key, Value: node.val, ParentKey: node.parentKey()}, true
 }
 
 // Get retrieves a value from the cache and updates LRU order.
 //
 // This method has a side effect of marking the node and all its ancestors as recently used,
 // moving them to the front of the LRU list and protecting them from immediate eviction.
-func (c *Cache[K, V]) Get(key K) (V, bool) {
+func (c *Cache[K, V]) Get(key K) (CacheNode[K, V], bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	node, exists := c.m[key]
+	node, exists := c.keysMap[key]
 	if !exists {
-		var zeroVal V
-		return zeroVal, false
+		return CacheNode[K, V]{}, false
 	}
 
 	// Update LRU order for the node and all its ancestors.
 	for n := node; n != nil; n = n.parent {
 		c.lruList.MoveToFront(n.lruElem)
 	}
-	return node.val, true
+	return CacheNode[K, V]{Key: key, Value: node.val, ParentKey: node.parentKey()}, true
 }
 
 // Len returns the number of items currently stored in the cache.
@@ -123,7 +139,7 @@ func (c *Cache[K, V]) Len() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	return len(c.m)
+	return len(c.keysMap)
 }
 
 // AddRoot initializes the cache with a root node.
@@ -138,9 +154,9 @@ func (c *Cache[K, V]) AddRoot(key K, val V) error {
 	if c.root != nil {
 		return ErrRootAlreadyExists
 	}
-	c.root = &cacheNode[K, V]{key: key, val: val}
+	c.root = newTreeNode(key, val, nil)
 	c.root.lruElem = c.lruList.PushFront(c.root)
-	c.m[key] = c.root
+	c.keysMap[key] = c.root
 	return nil
 }
 
@@ -157,19 +173,19 @@ func (c *Cache[K, V]) Add(key K, val V, parentKey K) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	parent, parentExists := c.m[parentKey]
+	parent, parentExists := c.keysMap[parentKey]
 	if !parentExists {
 		return ErrParentNotExist
 	}
 
-	if _, exists := c.m[key]; exists {
+	if _, exists := c.keysMap[key]; exists {
 		return ErrAlreadyExists
 	}
 
-	node := &cacheNode[K, V]{key: key, val: val, parent: parent}
-	c.m[key] = node
+	node := newTreeNode(key, val, parent)
+	c.keysMap[key] = node
 	node.lruElem = c.lruList.PushFront(node)
-	parent.children = append(parent.children, node)
+	parent.children[key] = node
 
 	for n := node.parent; n != nil; n = n.parent {
 		c.lruList.MoveToFront(n.lruElem)
@@ -193,12 +209,12 @@ func (c *Cache[K, V]) AddOrUpdate(key K, val V, parentKey K) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	parent, parentExists := c.m[parentKey]
+	parent, parentExists := c.keysMap[parentKey]
 	if !parentExists {
 		return ErrParentNotExist
 	}
 
-	node, exists := c.m[key]
+	node, exists := c.keysMap[key]
 	if exists {
 		if node.parent != parent {
 			// We need to check for cycles before moving the node to the new parent.
@@ -210,16 +226,16 @@ func (c *Cache[K, V]) AddOrUpdate(key K, val V, parentKey K) error {
 			// Before updating the parent, remove the node from the current parent's children.
 			node.removeFromParent()
 			node.parent = parent
-			parent.children = append(parent.children, node)
+			parent.children[key] = node
 		}
 		node.val = val
 		c.lruList.MoveToFront(node.lruElem)
 	} else {
 		// Add the new node to the cache.
-		node = &cacheNode[K, V]{key: key, val: val, parent: parent}
-		c.m[key] = node
+		node = newTreeNode(key, val, parent)
+		c.keysMap[key] = node
 		node.lruElem = c.lruList.PushFront(node)
-		parent.children = append(parent.children, node)
+		parent.children[key] = node
 	}
 
 	for n := node.parent; n != nil; n = n.parent {
@@ -233,22 +249,16 @@ func (c *Cache[K, V]) AddOrUpdate(key K, val V, parentKey K) error {
 	return nil
 }
 
-// BranchNode represents a node in a branch path from root to a specific node
-type BranchNode[K comparable, V any] struct {
-	Key   K
-	Value V
-}
-
 // GetBranch returns the path from the root to the specified key as a slice of BranchNodes.
 //
 // The returned slice is ordered from root (index 0) to the target node (last index).
 // If the key does not exist, an empty slice is returned.
 // Method updates LRU order for all nodes in the branch.
-func (c *Cache[K, V]) GetBranch(key K) []BranchNode[K, V] {
+func (c *Cache[K, V]) GetBranch(key K) []CacheNode[K, V] {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	node, exists := c.m[key]
+	node, exists := c.keysMap[key]
 	if !exists {
 		return nil
 	}
@@ -257,11 +267,12 @@ func (c *Cache[K, V]) GetBranch(key K) []BranchNode[K, V] {
 	for n := node; n != nil; n = n.parent {
 		depth++
 	}
-	branch := make([]BranchNode[K, V], depth)
+	branch := make([]CacheNode[K, V], depth)
 	i := depth
 	for n := node; n != nil; n = n.parent {
 		i--
-		branch[i] = BranchNode[K, V]{Key: n.key, Value: n.val}
+		branch[i] = CacheNode[K, V]{Key: n.key, Value: n.val, ParentKey: n.parentKey()}
+
 		c.lruList.MoveToFront(n.lruElem)
 	}
 
@@ -281,7 +292,7 @@ func (c *Cache[K, V]) TraverseToRoot(key K, f func(key K, val V, parentKey K)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	node, exists := c.m[key]
+	node, exists := c.keysMap[key]
 	if !exists {
 		return
 	}
@@ -335,7 +346,7 @@ func (c *Cache[K, V]) TraverseSubtree(key K, f func(key K, val V, parentKey K), 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	node, exists := c.m[key]
+	node, exists := c.keysMap[key]
 	if !exists {
 		return
 	}
@@ -354,8 +365,8 @@ func (c *Cache[K, V]) TraverseSubtree(key K, f func(key K, val V, parentKey K), 
 		}
 	}()
 
-	var traverse func(n *cacheNode[K, V], currentDepth int)
-	traverse = func(n *cacheNode[K, V], currentDepth int) {
+	var traverse func(n *treeNode[K, V], currentDepth int)
+	traverse = func(n *treeNode[K, V], currentDepth int) {
 		defer c.lruList.MoveToFront(n.lruElem)
 		var parentKey K
 		if n.parent != nil {
@@ -383,14 +394,14 @@ func (c *Cache[K, V]) Remove(key K) (removedCount int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	node, exists := c.m[key]
+	node, exists := c.keysMap[key]
 	if !exists {
 		return 0
 	}
 
-	var removeRecursively func(n *cacheNode[K, V])
-	removeRecursively = func(n *cacheNode[K, V]) {
-		delete(c.m, n.key)
+	var removeRecursively func(n *treeNode[K, V])
+	removeRecursively = func(n *treeNode[K, V]) {
+		delete(c.keysMap, n.key)
 		n.parent = nil
 		removedCount++
 		c.lruList.Remove(n.lruElem)
@@ -413,8 +424,8 @@ func (c *Cache[K, V]) evict() {
 	}
 
 	c.lruList.Remove(tailElem)
-	node := tailElem.Value.(*cacheNode[K, V])
-	delete(c.m, node.key)
+	node := tailElem.Value.(*treeNode[K, V])
+	delete(c.keysMap, node.key)
 	node.removeFromParent()
 
 	if c.onEvict != nil {

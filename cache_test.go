@@ -11,15 +11,15 @@ import (
 
 func TestCache_AddRoot(t *testing.T) {
 	cache := NewCache[string, int](10)
-	err := cache.AddRoot("root", 1)
+	err := cache.AddRoot("root", 42)
 	require.NoError(t, err)
 	require.Equal(t, 1, cache.Len())
 	require.Equal(t, []string{"root"}, getLRUOrder(cache))
 
 	// Verify the root node is added correctly.
-	val, ok := cache.Peek("root")
+	cacheNode, ok := cache.Peek("root")
 	require.True(t, ok)
-	require.Equal(t, 1, val)
+	require.Equal(t, CacheNode[string, int]{Key: "root", Value: 42}, cacheNode)
 
 	// Verify that adding a root node again returns an error.
 	err = cache.AddRoot("root", 2)
@@ -47,9 +47,9 @@ func TestCache_Add(t *testing.T) {
 	require.Equal(t, []string{"root", "sub-root-1"}, getLRUOrder(cache))
 
 	// Verify the child node is added correctly.
-	val, ok := cache.Peek("sub-root-1")
+	cacheNode, ok := cache.Peek("sub-root-1")
 	require.True(t, ok)
-	require.Equal(t, 2, val)
+	require.Equal(t, CacheNode[string, int]{Key: "sub-root-1", Value: 2, ParentKey: "root"}, cacheNode)
 	require.Equal(t, 2, cache.Len())
 
 	// Verify that adding a node with an existing key returns an error.
@@ -129,9 +129,9 @@ func TestCache_Add(t *testing.T) {
 	// 			customer-6
 
 	// Touch the customer-2 node to move it to the front of the LRU list.
-	val, ok = cache.Get("customer-2")
+	cacheNode, ok = cache.Get("customer-2")
 	require.True(t, ok)
-	require.Equal(t, 102, val)
+	require.Equal(t, CacheNode[string, int]{Key: "customer-2", Value: 102, ParentKey: "partner-2"}, cacheNode)
 	require.Equal(t, []string{
 		"root", "sub-root-1", "partner-2", "customer-2", "partner-6", "customer-6", "partner-5", "customer-5",
 		"partner-4", "customer-4", "partner-3", "customer-3",
@@ -234,9 +234,9 @@ func TestCache_AddOrUpdate(t *testing.T) {
 		// Add a new node using AddOrUpdate.
 		require.NoError(t, cache.AddOrUpdate("child", 2, "root"))
 		require.Equal(t, []string{"root", "child"}, getLRUOrder(cache))
-		val, ok := cache.Peek("child")
+		cacheNode, ok := cache.Peek("child")
 		require.True(t, ok)
-		require.Equal(t, 2, val)
+		require.Equal(t, CacheNode[string, int]{Key: "child", Value: 2, ParentKey: "root"}, cacheNode)
 	})
 
 	t.Run("update value with same parent", func(t *testing.T) {
@@ -246,9 +246,9 @@ func TestCache_AddOrUpdate(t *testing.T) {
 		// Update the value while keeping the same parent.
 		require.NoError(t, cache.AddOrUpdate("child", 20, "root"))
 		require.Equal(t, []string{"root", "child"}, getLRUOrder(cache))
-		val, ok := cache.Peek("child")
+		cacheNode, ok := cache.Peek("child")
 		require.True(t, ok)
-		require.Equal(t, 20, val)
+		require.Equal(t, CacheNode[string, int]{Key: "child", Value: 20, ParentKey: "root"}, cacheNode)
 	})
 
 	t.Run("update parent", func(t *testing.T) {
@@ -259,14 +259,14 @@ func TestCache_AddOrUpdate(t *testing.T) {
 		// Reparent child1 from "root" to "child2" using AddOrUpdate.
 		require.NoError(t, cache.AddOrUpdate("child1", 22, "child2"))
 		require.Equal(t, []string{"root", "child2", "child1"}, getLRUOrder(cache))
-		var traversed []traversedItem[string, int]
+		var traversed []CacheNode[string, int]
 		cache.TraverseToRoot("child1", func(key string, val int, parentKey string) {
-			traversed = append(traversed, traversedItem[string, int]{key: key, value: val, parentKey: parentKey})
+			traversed = append(traversed, CacheNode[string, int]{Key: key, Value: val, ParentKey: parentKey})
 		})
-		expected := []traversedItem[string, int]{
-			{key: "child1", value: 22, parentKey: "child2"},
-			{key: "child2", value: 3, parentKey: "root"},
-			{key: "root", value: 1, parentKey: ""},
+		expected := []CacheNode[string, int]{
+			{Key: "child1", Value: 22, ParentKey: "child2"},
+			{Key: "child2", Value: 3, ParentKey: "root"},
+			{Key: "root", Value: 1, ParentKey: ""},
 		}
 		require.Equal(t, expected, traversed)
 	})
@@ -293,26 +293,26 @@ func TestCache_AddOrUpdate(t *testing.T) {
 func TestCache_GetBranch(t *testing.T) {
 	t.Run("key exists", func(t *testing.T) {
 		cache := NewCache[string, int](10)
-		require.NoError(t, cache.AddRoot("root", 1))
-		require.NoError(t, cache.Add("child1", 2, "root"))
-		require.NoError(t, cache.Add("grandchild1", 3, "child1"))
-		require.NoError(t, cache.Add("child2", 4, "root"))
-		require.NoError(t, cache.Add("grandchild2", 5, "child2"))
+		require.NoError(t, cache.AddRoot("root", 10))
+		require.NoError(t, cache.Add("child1", 20, "root"))
+		require.NoError(t, cache.Add("grandchild1", 30, "child1"))
+		require.NoError(t, cache.Add("child2", 40, "root"))
+		require.NoError(t, cache.Add("grandchild2", 50, "child2"))
 		require.Equal(t, []string{"root", "child2", "grandchild2", "child1", "grandchild1"}, getLRUOrder(cache))
 
-		require.Equal(t, []BranchNode[string, int]{
-			{"root", 1},
-			{"child1", 2},
-			{"grandchild1", 3},
+		require.Equal(t, []CacheNode[string, int]{
+			{Key: "root", Value: 10},
+			{Key: "child1", Value: 20, ParentKey: "root"},
+			{Key: "grandchild1", Value: 30, ParentKey: "child1"},
 		}, cache.GetBranch("grandchild1"))
 		require.Equal(t, []string{"root", "child1", "grandchild1", "child2", "grandchild2"}, getLRUOrder(cache))
 	})
 
 	t.Run("key is root", func(t *testing.T) {
 		cache := NewCache[string, int](10)
-		require.NoError(t, cache.AddRoot("root", 1))
-		require.NoError(t, cache.Add("level1", 2, "root"))
-		require.Equal(t, []BranchNode[string, int]{{"root", 1}}, cache.GetBranch("root"))
+		require.NoError(t, cache.AddRoot("root", 10))
+		require.NoError(t, cache.Add("level1", 20, "root"))
+		require.Equal(t, []CacheNode[string, int]{{Key: "root", Value: 10}}, cache.GetBranch("root"))
 	})
 
 	t.Run("key doesn't exist", func(t *testing.T) {
@@ -333,9 +333,9 @@ func TestCache_TraverseToRoot(t *testing.T) {
 		_, ok := cache.Get("nonexistent")
 		require.False(t, ok)
 
-		var traversed []traversedItem[string, int]
+		var traversed []CacheNode[string, int]
 		cache.TraverseToRoot("nonexistent", func(key string, val int, parentKey string) {
-			traversed = append(traversed, traversedItem[string, int]{key: key, value: val, parentKey: parentKey})
+			traversed = append(traversed, CacheNode[string, int]{Key: key, Value: val, ParentKey: parentKey})
 		})
 		require.Nil(t, traversed)
 	})
@@ -356,19 +356,19 @@ func TestCache_TraverseToRoot(t *testing.T) {
 		require.Nil(t, lastEvicted)
 
 		// Get the "partner" node.
-		val, ok := cache.Get("partner-1")
+		cacheNode, ok := cache.Get("partner-1")
 		require.True(t, ok)
-		require.Equal(t, 3, val)
+		require.Equal(t, CacheNode[string, int]{Key: "partner-1", Value: 3, ParentKey: "sub-root"}, cacheNode)
 
 		// Traverse to the root node.
-		var traversed []traversedItem[string, int]
+		var traversed []CacheNode[string, int]
 		cache.TraverseToRoot("partner-1", func(key string, val int, parentKey string) {
-			traversed = append(traversed, traversedItem[string, int]{key: key, value: val, parentKey: parentKey})
+			traversed = append(traversed, CacheNode[string, int]{Key: key, Value: val, ParentKey: parentKey})
 		})
-		expected := []traversedItem[string, int]{
-			{key: "partner-1", value: 3, parentKey: "sub-root"},
-			{key: "sub-root", value: 2, parentKey: "root"},
-			{key: "root", value: 1, parentKey: ""},
+		expected := []CacheNode[string, int]{
+			{Key: "partner-1", Value: 3, ParentKey: "sub-root"},
+			{Key: "sub-root", Value: 2, ParentKey: "root"},
+			{Key: "root", Value: 1, ParentKey: ""},
 		}
 		require.Equal(t, expected, traversed)
 
@@ -419,9 +419,9 @@ func TestCache_TraverseToRoot(t *testing.T) {
 			require.Equal(t, []string{"root", "child1", "grandchild1", "child2", "grandchild2"}, getLRUOrder(cache))
 
 			// Verify that the cache is still usable after panic
-			val, ok := cache.Get("grandchild2")
+			cacheNode, ok := cache.Get("grandchild2")
 			require.True(t, ok)
-			require.Equal(t, 5, val)
+			require.Equal(t, CacheNode[string, int]{Key: "grandchild2", Value: 5, ParentKey: "child2"}, cacheNode)
 			require.Equal(t, []string{"root", "child2", "grandchild2", "child1", "grandchild1"}, getLRUOrder(cache))
 		}()
 
@@ -437,14 +437,14 @@ func TestCache_TraverseSubtree(t *testing.T) {
 		require.NoError(t, cache.Add("child2", 3, "root"))
 		require.NoError(t, cache.Add("grandchild1", 4, "child1"))
 
-		var traversed []traversedItem[string, int]
+		var traversed []CacheNode[string, int]
 		cache.TraverseSubtree("child1", func(key string, val int, parentKey string) {
-			traversed = append(traversed, traversedItem[string, int]{key: key, value: val, parentKey: parentKey})
+			traversed = append(traversed, CacheNode[string, int]{Key: key, Value: val, ParentKey: parentKey})
 		})
 		// Expected pre-order: starting at "child1" then "grandchild1"
-		require.Equal(t, []traversedItem[string, int]{
-			{key: "child1", value: 2, parentKey: "root"},
-			{key: "grandchild1", value: 4, parentKey: "child1"},
+		require.Equal(t, []CacheNode[string, int]{
+			{Key: "child1", Value: 2, ParentKey: "root"},
+			{Key: "grandchild1", Value: 4, ParentKey: "child1"},
 		}, traversed)
 		require.Equal(t, []string{"root", "child1", "grandchild1", "child2"}, getLRUOrder(cache))
 	})
@@ -457,19 +457,32 @@ func TestCache_TraverseSubtree(t *testing.T) {
 		require.NoError(t, cache.Add("grandchild1", 4, "child1"))
 		require.NoError(t, cache.Add("grandchild2", 5, "child2"))
 
-		var traversed []traversedItem[string, int]
+		var traversed []CacheNode[string, int]
 		// Iterating from the root should traverse the whole tree in depth-first order.
 		cache.TraverseSubtree("root", func(key string, val int, parentKey string) {
-			traversed = append(traversed, traversedItem[string, int]{key: key, value: val, parentKey: parentKey})
+			traversed = append(traversed, CacheNode[string, int]{Key: key, Value: val, ParentKey: parentKey})
 		})
-		require.Equal(t, []traversedItem[string, int]{
-			{key: "root", value: 1, parentKey: ""},
-			{key: "child1", value: 2, parentKey: "root"},
-			{key: "grandchild1", value: 4, parentKey: "child1"},
-			{key: "child2", value: 3, parentKey: "root"},
-			{key: "grandchild2", value: 5, parentKey: "child2"},
-		}, traversed)
-		require.Equal(t, []string{"root", "child2", "grandchild2", "child1", "grandchild1"}, getLRUOrder(cache))
+
+		require.Len(t, traversed, 5)
+		if traversed[len(traversed)-1].Key == "grandchild2" {
+			require.Equal(t, []CacheNode[string, int]{
+				{Key: "root", Value: 1, ParentKey: ""},
+				{Key: "child1", Value: 2, ParentKey: "root"},
+				{Key: "grandchild1", Value: 4, ParentKey: "child1"},
+				{Key: "child2", Value: 3, ParentKey: "root"},
+				{Key: "grandchild2", Value: 5, ParentKey: "child2"},
+			}, traversed)
+			require.Equal(t, []string{"root", "child2", "grandchild2", "child1", "grandchild1"}, getLRUOrder(cache))
+		} else {
+			require.Equal(t, []CacheNode[string, int]{
+				{Key: "root", Value: 1, ParentKey: ""},
+				{Key: "child2", Value: 3, ParentKey: "root"},
+				{Key: "grandchild2", Value: 5, ParentKey: "child2"},
+				{Key: "child1", Value: 2, ParentKey: "root"},
+				{Key: "grandchild1", Value: 4, ParentKey: "child1"},
+			}, traversed)
+			require.Equal(t, []string{"root", "child1", "grandchild1", "child2", "grandchild2"}, getLRUOrder(cache))
+		}
 	})
 
 	t.Run("non-existent key", func(t *testing.T) {
@@ -506,9 +519,9 @@ func TestCache_TraverseSubtree(t *testing.T) {
 			require.Equal(t, []string{"root", "child1", "child2", "grandchild2", "grandchild1"}, getLRUOrder(cache))
 
 			// Verify that the cache is still usable after panic
-			val, ok := cache.Get("grandchild2")
+			cacheNode, ok := cache.Get("grandchild2")
 			require.True(t, ok)
-			require.Equal(t, 5, val)
+			require.Equal(t, CacheNode[string, int]{Key: "grandchild2", Value: 5, ParentKey: "child2"}, cacheNode)
 			require.Equal(t, []string{"root", "child2", "grandchild2", "child1", "grandchild1"}, getLRUOrder(cache))
 		}()
 
@@ -517,121 +530,117 @@ func TestCache_TraverseSubtree(t *testing.T) {
 }
 
 func TestCache_TraverseSubtree_WithMaxDepth(t *testing.T) {
-	t.Run("with unlimited depth", func(t *testing.T) {
-		cache := NewCache[string, int](10)
-		require.NoError(t, cache.AddRoot("root", 1))
-		require.NoError(t, cache.Add("child1", 2, "root"))
-		require.NoError(t, cache.Add("child2", 3, "root"))
-		require.NoError(t, cache.Add("grandchild1", 4, "child1"))
-		require.NoError(t, cache.Add("grandchild2", 5, "child2"))
-		require.NoError(t, cache.Add("greatgrandchild1", 6, "grandchild1"))
+	nodes := map[string]CacheNode[string, int]{
+		"root":             {Key: "root", Value: 11, ParentKey: ""},
+		"child1":           {Key: "child1", Value: 12, ParentKey: "root"},
+		"child2":           {Key: "child2", Value: 13, ParentKey: "root"},
+		"grandchild1":      {Key: "grandchild1", Value: 14, ParentKey: "child1"},
+		"grandchild2":      {Key: "grandchild2", Value: 15, ParentKey: "child2"},
+		"greatgrandchild1": {Key: "greatgrandchild1", Value: 16, ParentKey: "grandchild1"},
+		"greatgrandchild2": {Key: "greatgrandchild2", Value: 17, ParentKey: "grandchild2"},
+	}
 
-		var traversed []traversedItem[string, int]
+	setupCache := func() *Cache[string, int] {
+		cache := NewCache[string, int](10)
+		for _, key := range []string{"root", "child1", "child2", "grandchild1", "grandchild2", "greatgrandchild1", "greatgrandchild2"} {
+			node := nodes[key]
+			if node.ParentKey == "" {
+				require.NoError(t, cache.AddRoot(node.Key, node.Value))
+			} else {
+				require.NoError(t, cache.Add(node.Key, node.Value, node.ParentKey))
+			}
+		}
+		return cache
+	}
+
+	makeNodes := func(keys ...string) []CacheNode[string, int] {
+		result := make([]CacheNode[string, int], 0, len(keys))
+		for _, key := range keys {
+			result = append(result, nodes[key])
+		}
+		return result
+	}
+
+	t.Run("with unlimited depth", func(t *testing.T) {
+		cache := setupCache()
+
+		var traversed []CacheNode[string, int]
 		cache.TraverseSubtree("root", func(key string, val int, parentKey string) {
-			traversed = append(traversed, traversedItem[string, int]{key: key, value: val, parentKey: parentKey})
+			traversed = append(traversed, CacheNode[string, int]{Key: key, Value: val, ParentKey: parentKey})
 		})
 
-		// Expected depth-first order: root, child1, grandchild1, greatgrandchild1, child2, grandchild2
-		require.Equal(t, []traversedItem[string, int]{
-			{key: "root", value: 1, parentKey: ""},
-			{key: "child1", value: 2, parentKey: "root"},
-			{key: "grandchild1", value: 4, parentKey: "child1"},
-			{key: "greatgrandchild1", value: 6, parentKey: "grandchild1"},
-			{key: "child2", value: 3, parentKey: "root"},
-			{key: "grandchild2", value: 5, parentKey: "child2"},
-		}, traversed)
-		require.Equal(t, []string{"root", "child2", "grandchild2", "child1", "grandchild1", "greatgrandchild1"},
-			getLRUOrder(cache))
+		require.Len(t, traversed, 7)
+		if traversed[1].Key == "child1" {
+			require.Equal(t, makeNodes("root", "child1", "grandchild1", "greatgrandchild1", "child2", "grandchild2", "greatgrandchild2"), traversed)
+			require.Equal(t, []string{"root", "child2", "grandchild2", "greatgrandchild2", "child1", "grandchild1", "greatgrandchild1"}, getLRUOrder(cache))
+		} else {
+			require.Equal(t, makeNodes("root", "child2", "grandchild2", "greatgrandchild2", "child1", "grandchild1", "greatgrandchild1"), traversed)
+			require.Equal(t, []string{"root", "child1", "grandchild1", "greatgrandchild1", "child2", "grandchild2", "greatgrandchild2"}, getLRUOrder(cache))
+		}
 	})
 
 	t.Run("with depth 0 - node only", func(t *testing.T) {
-		cache := NewCache[string, int](10)
-		require.NoError(t, cache.AddRoot("root", 1))
-		require.NoError(t, cache.Add("child1", 2, "root"))
-		require.NoError(t, cache.Add("child2", 3, "root"))
+		cache := setupCache()
 
-		var traversed []traversedItem[string, int]
+		var traversed []CacheNode[string, int]
 		cache.TraverseSubtree("root", func(key string, val int, parentKey string) {
-			traversed = append(traversed, traversedItem[string, int]{key: key, value: val, parentKey: parentKey})
+			traversed = append(traversed, CacheNode[string, int]{Key: key, Value: val, ParentKey: parentKey})
 		}, WithMaxDepth(0))
 
 		// Should only include the root node
-		require.Equal(t, []traversedItem[string, int]{
-			{key: "root", value: 1, parentKey: ""},
-		}, traversed)
-		require.Equal(t, []string{"root", "child2", "child1"}, getLRUOrder(cache))
+		require.Len(t, traversed, 1)
+		require.Equal(t, makeNodes("root"), traversed)
+		require.Equal(t, []string{"root", "child2", "grandchild2", "greatgrandchild2", "child1", "grandchild1", "greatgrandchild1"}, getLRUOrder(cache))
 	})
 
 	t.Run("with depth 1 - node and immediate children", func(t *testing.T) {
-		cache := NewCache[string, int](10)
-		require.NoError(t, cache.AddRoot("root", 1))
-		require.NoError(t, cache.Add("child1", 2, "root"))
-		require.NoError(t, cache.Add("child2", 3, "root"))
-		require.NoError(t, cache.Add("grandchild1", 4, "child1"))
-		require.NoError(t, cache.Add("grandchild2", 5, "child2"))
+		cache := setupCache()
 
-		var traversed []traversedItem[string, int]
+		var traversed []CacheNode[string, int]
 		cache.TraverseSubtree("root", func(key string, val int, parentKey string) {
-			traversed = append(traversed, traversedItem[string, int]{key: key, value: val, parentKey: parentKey})
+			traversed = append(traversed, CacheNode[string, int]{Key: key, Value: val, ParentKey: parentKey})
 		}, WithMaxDepth(1))
 
 		// Should include root and its direct children
-		require.Equal(t, []traversedItem[string, int]{
-			{key: "root", value: 1, parentKey: ""},
-			{key: "child1", value: 2, parentKey: "root"},
-			{key: "child2", value: 3, parentKey: "root"},
-		}, traversed)
-		require.Equal(t, []string{"root", "child2", "child1", "grandchild2", "grandchild1"}, getLRUOrder(cache))
+		require.Len(t, traversed, 3)
+		if traversed[1].Key == "child1" {
+			require.Equal(t, makeNodes("root", "child1", "child2"), traversed)
+			require.Equal(t, []string{"root", "child2", "child1", "grandchild2", "greatgrandchild2", "grandchild1", "greatgrandchild1"}, getLRUOrder(cache))
+		} else {
+			require.Equal(t, makeNodes("root", "child2", "child1"), traversed)
+			require.Equal(t, []string{"root", "child1", "child2", "grandchild2", "greatgrandchild2", "grandchild1", "greatgrandchild1"}, getLRUOrder(cache))
+		}
 	})
 
 	t.Run("depth 2 - node, children, and grandchildren", func(t *testing.T) {
-		cache := NewCache[string, int](10)
-		require.NoError(t, cache.AddRoot("root", 1))
-		require.NoError(t, cache.Add("child1", 2, "root"))
-		require.NoError(t, cache.Add("child2", 3, "root"))
-		require.NoError(t, cache.Add("grandchild1", 4, "child1"))
-		require.NoError(t, cache.Add("grandchild2", 5, "child2"))
-		require.NoError(t, cache.Add("greatgrandchild1", 6, "grandchild1"))
+		cache := setupCache()
 
-		var traversed []traversedItem[string, int]
+		var traversed []CacheNode[string, int]
 		cache.TraverseSubtree("root", func(key string, val int, parentKey string) {
-			traversed = append(traversed, traversedItem[string, int]{key: key, value: val, parentKey: parentKey})
+			traversed = append(traversed, CacheNode[string, int]{Key: key, Value: val, ParentKey: parentKey})
 		}, WithMaxDepth(2))
 
-		// Should include root, its children, and grandchildren
-		require.Equal(t, []traversedItem[string, int]{
-			{key: "root", value: 1, parentKey: ""},
-			{key: "child1", value: 2, parentKey: "root"},
-			{key: "grandchild1", value: 4, parentKey: "child1"},
-			{key: "child2", value: 3, parentKey: "root"},
-			{key: "grandchild2", value: 5, parentKey: "child2"},
-		}, traversed)
-		require.Equal(t, []string{"root", "child2", "grandchild2", "child1", "grandchild1", "greatgrandchild1"},
-			getLRUOrder(cache))
+		require.Len(t, traversed, 5)
+		if traversed[1].Key == "child1" {
+			require.Equal(t, makeNodes("root", "child1", "grandchild1", "child2", "grandchild2"), traversed)
+			require.Equal(t, []string{"root", "child2", "grandchild2", "child1", "grandchild1", "greatgrandchild2", "greatgrandchild1"}, getLRUOrder(cache))
+		} else {
+			require.Equal(t, makeNodes("root", "child2", "grandchild2", "child1", "grandchild1"), traversed)
+			require.Equal(t, []string{"root", "child1", "grandchild1", "child2", "grandchild2", "greatgrandchild2", "greatgrandchild1"}, getLRUOrder(cache))
+		}
 	})
 
 	t.Run("traverse from middle node", func(t *testing.T) {
-		cache := NewCache[string, int](10)
-		require.NoError(t, cache.AddRoot("root", 1))
-		require.NoError(t, cache.Add("child1", 2, "root"))
-		require.NoError(t, cache.Add("child2", 3, "root"))
-		require.NoError(t, cache.Add("grandchild1", 4, "child1"))
-		require.NoError(t, cache.Add("grandchild2", 5, "child1"))
-		require.NoError(t, cache.Add("greatgrandchild1", 6, "grandchild1"))
+		cache := setupCache()
 
-		var traversed []traversedItem[string, int]
+		var traversed []CacheNode[string, int]
 		cache.TraverseSubtree("child1", func(key string, val int, parentKey string) {
-			traversed = append(traversed, traversedItem[string, int]{key: key, value: val, parentKey: parentKey})
+			traversed = append(traversed, CacheNode[string, int]{Key: key, Value: val, ParentKey: parentKey})
 		}, WithMaxDepth(1))
 
 		// Should include child1 and its direct children
-		require.Equal(t, []traversedItem[string, int]{
-			{key: "child1", value: 2, parentKey: "root"},
-			{key: "grandchild1", value: 4, parentKey: "child1"},
-			{key: "grandchild2", value: 5, parentKey: "child1"},
-		}, traversed)
-		require.Equal(t, []string{"root", "child1", "grandchild2", "grandchild1", "greatgrandchild1", "child2"},
-			getLRUOrder(cache))
+		require.Equal(t, makeNodes("child1", "grandchild1"), traversed)
+		require.Equal(t, []string{"root", "child1", "grandchild1", "child2", "grandchild2", "greatgrandchild2", "greatgrandchild1"}, getLRUOrder(cache))
 	})
 }
 
@@ -669,12 +678,12 @@ func TestConcurrency(t *testing.T) {
 				switch j % 5 {
 				case 0:
 					// Normal get
-					v, ok := cache.Get(key)
+					cacheNode, ok := cache.Get(key)
 					if !ok {
 						errs <- fmt.Errorf("%s not found in cache", key)
 					}
-					if v != i*1000+j {
-						errs <- fmt.Errorf("unexpected value for %s, want %d, got %d", key, i*1000+j, v)
+					if cacheNode.Value != i*1000+j {
+						errs <- fmt.Errorf("unexpected value for %s, want %d, got %d", key, i*1000+j, cacheNode.Value)
 					}
 				case 1:
 					// Traverse with panic possibility
@@ -706,28 +715,22 @@ func TestConcurrency(t *testing.T) {
 	}
 
 	// Verify the cache is still in a usable state
-	val, ok := cache.Get("root")
+	cacheNode, ok := cache.Get("root")
 	require.True(t, ok)
-	require.Equal(t, 1, val)
+	require.Equal(t, CacheNode[string, int]{Key: "root", Value: 1}, cacheNode)
 
 	// Verify we can still perform operations
 	err := cache.Add("final-test", 999, "root")
 	require.NoError(t, err)
-	val, ok = cache.Get("final-test")
+	cacheNode, ok = cache.Get("final-test")
 	require.True(t, ok)
-	require.Equal(t, 999, val)
+	require.Equal(t, CacheNode[string, int]{Key: "final-test", Value: 999, ParentKey: "root"}, cacheNode)
 }
 
 func getLRUOrder[K comparable, V any](c *Cache[K, V]) []K {
 	var keys []K
 	for e := c.lruList.Front(); e != nil; e = e.Next() {
-		keys = append(keys, e.Value.(*cacheNode[K, V]).key)
+		keys = append(keys, e.Value.(*treeNode[K, V]).key)
 	}
 	return keys
-}
-
-type traversedItem[K comparable, V any] struct {
-	key       K
-	value     V
-	parentKey K
 }
