@@ -27,13 +27,9 @@ func TestCache_AddRoot(t *testing.T) {
 }
 
 func TestCache_Add(t *testing.T) {
-	type evictedNode struct {
-		key string
-		val int
-	}
-	var lastEvicted *evictedNode
-	onEvict := func(key string, val int) {
-		lastEvicted = &evictedNode{key: key, val: val}
+	var lastEvicted *CacheNode[string, int]
+	onEvict := func(node CacheNode[string, int]) {
+		lastEvicted = &node
 	}
 	cache := NewCache[string, int](12, WithOnEvict(onEvict))
 
@@ -87,8 +83,8 @@ func TestCache_Add(t *testing.T) {
 	// 			customer-5
 
 	require.NoError(t, cache.Add("partner-6", 16, "sub-root-1"))
-	require.Equal(t, "customer-1", lastEvicted.key)
-	require.Equal(t, 101, lastEvicted.val)
+	require.NotNil(t, lastEvicted)
+	require.Equal(t, CacheNode[string, int]{Key: "customer-1", Value: 101, ParentKey: "partner-1"}, *lastEvicted)
 	require.Equal(t, []string{
 		"root", "sub-root-1", "partner-6", "partner-5", "customer-5", "partner-4", "customer-4",
 		"partner-3", "customer-3", "partner-2", "customer-2", "partner-1",
@@ -108,8 +104,8 @@ func TestCache_Add(t *testing.T) {
 	// 		partner-6
 
 	require.NoError(t, cache.Add("customer-6", 106, "partner-6"))
-	require.Equal(t, "partner-1", lastEvicted.key)
-	require.Equal(t, 11, lastEvicted.val)
+	require.NotNil(t, lastEvicted)
+	require.Equal(t, CacheNode[string, int]{Key: "partner-1", Value: 11, ParentKey: "sub-root-1"}, *lastEvicted)
 	require.Equal(t, []string{
 		"root", "sub-root-1", "partner-6", "customer-6", "partner-5", "customer-5", "partner-4", "customer-4",
 		"partner-3", "customer-3", "partner-2", "customer-2",
@@ -139,8 +135,8 @@ func TestCache_Add(t *testing.T) {
 
 	// Verify eviction on adding a new node after touching an existing node.
 	require.NoError(t, cache.Add("partner-7", 17, "sub-root-1"))
-	require.Equal(t, "customer-3", lastEvicted.key)
-	require.Equal(t, 103, lastEvicted.val)
+	require.NotNil(t, lastEvicted)
+	require.Equal(t, CacheNode[string, int]{Key: "customer-3", Value: 103, ParentKey: "partner-3"}, *lastEvicted)
 	require.Equal(t, []string{
 		"root", "sub-root-1", "partner-7", "partner-2", "customer-2", "partner-6", "customer-6", "partner-5",
 		"customer-5", "partner-4", "customer-4", "partner-3",
@@ -341,13 +337,9 @@ func TestCache_TraverseToRoot(t *testing.T) {
 	})
 
 	t.Run("key found, LRU list updated", func(t *testing.T) {
-		type evictedNode struct {
-			key string
-			val int
-		}
-		var lastEvicted *evictedNode
-		onEvict := func(key string, val int) {
-			lastEvicted = &evictedNode{key: key, val: val}
+		var lastEvicted *CacheNode[string, int]
+		onEvict := func(node CacheNode[string, int]) {
+			lastEvicted = &node
 		}
 		cache := NewCache[string, int](3, WithOnEvict(onEvict))
 		require.NoError(t, cache.AddRoot("root", 1))
@@ -380,8 +372,8 @@ func TestCache_TraverseToRoot(t *testing.T) {
 			_, ok = cache.Get(key)
 			require.True(t, ok)
 		}
-		require.Equal(t, "customer-1", lastEvicted.key)
-		require.Equal(t, 4, lastEvicted.val)
+		require.NotNil(t, lastEvicted)
+		require.Equal(t, CacheNode[string, int]{Key: "customer-1", Value: 4, ParentKey: "partner-1"}, *lastEvicted)
 		require.Equal(t, 3, cache.Len())
 
 		// Add a new node to the cache under the "sub-root" node. Partner-1 node will be evicted.
@@ -392,8 +384,7 @@ func TestCache_TraverseToRoot(t *testing.T) {
 			_, ok = cache.Get(key)
 			require.True(t, ok)
 		}
-		require.Equal(t, "partner-1", lastEvicted.key)
-		require.Equal(t, 3, lastEvicted.val)
+		require.Equal(t, CacheNode[string, int]{Key: "partner-1", Value: 3, ParentKey: "sub-root"}, cacheNode)
 		require.Equal(t, 3, cache.Len())
 	})
 
@@ -728,7 +719,7 @@ func TestConcurrency(t *testing.T) {
 }
 
 func getLRUOrder[K comparable, V any](c *Cache[K, V]) []K {
-	var keys []K
+	keys := make([]K, 0, c.Len())
 	for e := c.lruList.Front(); e != nil; e = e.Next() {
 		keys = append(keys, e.Value.(*treeNode[K, V]).key)
 	}
