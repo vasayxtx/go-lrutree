@@ -30,7 +30,7 @@ var (
 // implies that its ancestors are also valuable and should remain in cache.
 type Cache[K comparable, V any] struct {
 	maxEntries int
-	onEvict    func(key K, value V)
+	onEvict    func(node CacheNode[K, V])
 	mu         sync.RWMutex
 	keysMap    map[K]*treeNode[K, V]
 	lruList    *list.List
@@ -80,7 +80,7 @@ func (n *treeNode[K, V]) parentKey() K {
 
 type CacheOption[K comparable, V any] func(*Cache[K, V])
 
-func WithOnEvict[K comparable, V any](onEvict func(key K, value V)) CacheOption[K, V] {
+func WithOnEvict[K comparable, V any](onEvict func(node CacheNode[K, V])) CacheOption[K, V] {
 	return func(c *Cache[K, V]) {
 		c.onEvict = onEvict
 	}
@@ -272,7 +272,6 @@ func (c *Cache[K, V]) GetBranch(key K) []CacheNode[K, V] {
 	for n := node; n != nil; n = n.parent {
 		i--
 		branch[i] = CacheNode[K, V]{Key: n.key, Value: n.val, ParentKey: n.parentKey()}
-
 		c.lruList.MoveToFront(n.lruElem)
 	}
 
@@ -425,10 +424,11 @@ func (c *Cache[K, V]) evict() {
 
 	c.lruList.Remove(tailElem)
 	node := tailElem.Value.(*treeNode[K, V])
+	parentKey := node.parentKey()
 	delete(c.keysMap, node.key)
 	node.removeFromParent()
 
 	if c.onEvict != nil {
-		c.onEvict(node.key, node.val)
+		c.onEvict(CacheNode[K, V]{Key: node.key, Value: node.val, ParentKey: parentKey})
 	}
 }

@@ -46,42 +46,45 @@ type OrgItem struct {
 }
 
 func main() {
-	// Create a new cache with a maximum size of 4 entries and an eviction callback
-	cache := lrutree.NewCache[string, OrgItem](4, lrutree.WithOnEvict(func(key string, value OrgItem) {
-		fmt.Printf("Node %s evicted", key)
+	// Create a new cache with a maximum size of 4 entries and an eviction callback.
+	cache := lrutree.NewCache[string, OrgItem](4, lrutree.WithOnEvict(func(node lrutree.CacheNode[string, OrgItem]) {
+		fmt.Printf("Evicted: %s (key=%s, parent=%s)\n", node.Value.Name, node.Key, node.ParentKey)
 	}))
 
-	// Add nodes to the cache
-	_ = cache.AddRoot("company", OrgItem{"Acme Corp"})
+	// Add nodes to the cache.
+	_ = cache.AddRoot("company", OrgItem{"My Company"})
 	_ = cache.Add("engineering", OrgItem{"Engineering department"}, "company")
 	_ = cache.Add("frontend", OrgItem{"Frontend team"}, "engineering")
 	_ = cache.Add("backend", OrgItem{"Backend team"}, "engineering")
 
-	// Get the value by key
-	frontendItem, ok := cache.Get("frontend")
-	if ok {
-		fmt.Println(frontendItem.Name) // Output: Frontend team
+	// Get the value by key.
+	// "frontend" node and all its ancestors ("engineering" and "company" nodes) are marked as recently used.
+	if cacheNode, ok := cache.Get("frontend"); ok {
+		fmt.Printf("Get: %s (key=%s, parent=%s)\n", cacheNode.Value.Name, cacheNode.Key, cacheNode.ParentKey)
+		// Output: Get: Frontend team (key=frontend, parent=engineering)
 	}
-	fmt.Println("-------------------")
 
-	// Get the full branch from the root to the node with key "backend"
+	// Get the full branch from the root to the node with key "backend".
+	// "backend", "engineering", and "company" nodes are marked as recently used.
 	branch := cache.GetBranch("backend")
-	for _, item := range branch {
-		fmt.Println(item.Value.Name)
+	for i, node := range branch {
+		fmt.Printf("GetBranch[%d]: %s (key=%s, parent=%s)\n", i, node.Value.Name, node.Key, node.ParentKey)
 	}
-	fmt.Println("-------------------")
-
-	// Add a new node, which will evict the least recently used leaf node (frontend) since the cache is full (4 entries)
-	_ = cache.Add("architects", OrgItem{"Architects team"}, "engineering")
-
 	// Output:
-	// Frontend team
-	// -------------------
-	// Acme Corp
-	// Engineering department
-	// Backend team
-	// -------------------
-	// Node frontend evicted
+	// GetBranch[0]: My Company (key=company, parent=)
+	// GetBranch[1]: Engineering department (key=engineering, parent=company)
+	// GetBranch[2]: Backend team (key=backend, parent=engineering)
+
+	// Peek the value by key without updating the LRU order.
+	if cacheNode, ok := cache.Peek("frontend"); ok {
+		fmt.Printf("Peek: %s (key=%s, parent=%s)\n", cacheNode.Value.Name, cacheNode.Key, cacheNode.ParentKey)
+		// Output: Peek: Frontend team (key=frontend, parent=engineering)
+	}
+
+	// Add a new node exceeding the cache's maximum size.
+	// The least recently used leaf node ("frontend") is evicted.
+	_ = cache.Add("architects", OrgItem{"Architects team"}, "engineering")
+	// Output: Evicted: Frontend team (key=frontend, parent=engineering)
 }
 ```
 
