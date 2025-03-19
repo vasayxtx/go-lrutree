@@ -255,8 +255,8 @@ func (c *Cache[K, V]) AddOrUpdate(key K, val V, parentKey K) error {
 // If the key does not exist, an empty slice is returned.
 // Method updates LRU order for all nodes in the branch.
 func (c *Cache[K, V]) GetBranch(key K) []CacheNode[K, V] {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	node, exists := c.keysMap[key]
 	if !exists {
