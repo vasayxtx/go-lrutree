@@ -13,6 +13,21 @@ var (
 	ErrCycleDetected     = errors.New("cycle detected")
 )
 
+// StatsCollector is an interface for collecting cache metrics and statistics.
+type StatsCollector interface {
+	// SetAmount sets the total number of entries in the cache.
+	SetAmount(int)
+
+	// IncHits increments the total number of successfully found keys in the cache.
+	IncHits()
+
+	// IncMisses increments the total number of not found keys in the cache.
+	IncMisses()
+
+	// AddEvictions increments the total number of evicted entries.
+	AddEvictions(int)
+}
+
 // Cache is a hierarchical cache with LRU (Least Recently Used) eviction policy.
 //
 // It maintains parent-child relationships between nodes in a tree structure while
@@ -31,6 +46,7 @@ var (
 type Cache[K comparable, V any] struct {
 	maxEntries int
 	onEvict    func(node CacheNode[K, V])
+	stats      StatsCollector
 	mu         sync.RWMutex
 	keysMap    map[K]*treeNode[K, V]
 	lruList    *list.List
@@ -86,12 +102,20 @@ func WithOnEvict[K comparable, V any](onEvict func(node CacheNode[K, V])) CacheO
 	}
 }
 
+// WithStatsCollector sets a stats collector for the cache.
+func WithStatsCollector[K comparable, V any](stats StatsCollector) CacheOption[K, V] {
+	return func(c *Cache[K, V]) {
+		c.stats = stats
+	}
+}
+
 // NewCache creates a new cache with the given maximum number of entries and eviction callback.
 func NewCache[K comparable, V any](maxEntries int, options ...CacheOption[K, V]) *Cache[K, V] {
 	c := &Cache[K, V]{
 		maxEntries: maxEntries,
 		keysMap:    make(map[K]*treeNode[K, V]),
 		lruList:    list.New(),
+		stats:      nullStats{}, // Use null object by default
 	}
 	for _, opt := range options {
 		opt(c)
@@ -109,8 +133,11 @@ func (c *Cache[K, V]) Peek(key K) (CacheNode[K, V], bool) {
 
 	node, exists := c.keysMap[key]
 	if !exists {
+		c.stats.IncMisses()
 		return CacheNode[K, V]{}, false
 	}
+
+	c.stats.IncHits()
 	return CacheNode[K, V]{Key: key, Value: node.val, ParentKey: node.parentKey()}, true
 }
 
@@ -124,6 +151,7 @@ func (c *Cache[K, V]) Get(key K) (CacheNode[K, V], bool) {
 
 	node, exists := c.keysMap[key]
 	if !exists {
+		c.stats.IncMisses()
 		return CacheNode[K, V]{}, false
 	}
 
@@ -131,6 +159,8 @@ func (c *Cache[K, V]) Get(key K) (CacheNode[K, V], bool) {
 	for n := node; n != nil; n = n.parent {
 		c.lruList.MoveToFront(n.lruElem)
 	}
+
+	c.stats.IncHits()
 	return CacheNode[K, V]{Key: key, Value: node.val, ParentKey: node.parentKey()}, true
 }
 
@@ -157,6 +187,8 @@ func (c *Cache[K, V]) AddRoot(key K, val V) error {
 	c.root = newTreeNode(key, val, nil)
 	c.root.lruElem = c.lruList.PushFront(c.root)
 	c.keysMap[key] = c.root
+
+	c.stats.SetAmount(len(c.keysMap))
 	return nil
 }
 
@@ -170,6 +202,14 @@ func (c *Cache[K, V]) AddRoot(key K, val V) error {
 // If parentKey is not found in the cache, ErrParentNotExist is returned.
 // If the node with the given key already exists, ErrAlreadyExists is returned.
 func (c *Cache[K, V]) Add(key K, val V, parentKey K) error {
+	var evictedNode CacheNode[K, V]
+	var evicted bool
+	defer func() {
+		if evicted && c.onEvict != nil {
+			c.onEvict(evictedNode)
+		}
+	}()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -192,8 +232,10 @@ func (c *Cache[K, V]) Add(key K, val V, parentKey K) error {
 	}
 
 	if c.maxEntries > 0 && c.lruList.Len() > c.maxEntries {
-		c.evict()
+		evictedNode, evicted = c.evict()
 	}
+
+	c.stats.SetAmount(len(c.keysMap))
 
 	return nil
 }
@@ -206,6 +248,14 @@ func (c *Cache[K, V]) Add(key K, val V, parentKey K) error {
 // creating loops in the tree structure (ErrCycleDetected is returned in such cases).
 // If parentKey is not found in the cache, ErrParentNotExist is returned.
 func (c *Cache[K, V]) AddOrUpdate(key K, val V, parentKey K) error {
+	var evictedNode CacheNode[K, V]
+	var evicted bool
+	defer func() {
+		if evicted && c.onEvict != nil {
+			c.onEvict(evictedNode)
+		}
+	}()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -243,8 +293,10 @@ func (c *Cache[K, V]) AddOrUpdate(key K, val V, parentKey K) error {
 	}
 
 	if c.maxEntries > 0 && c.lruList.Len() > c.maxEntries {
-		c.evict()
+		evictedNode, evicted = c.evict()
 	}
+
+	c.stats.SetAmount(len(c.keysMap))
 
 	return nil
 }
@@ -260,6 +312,7 @@ func (c *Cache[K, V]) GetBranch(key K) []CacheNode[K, V] {
 
 	node, exists := c.keysMap[key]
 	if !exists {
+		c.stats.IncMisses()
 		return nil
 	}
 
@@ -274,6 +327,8 @@ func (c *Cache[K, V]) GetBranch(key K) []CacheNode[K, V] {
 		branch[i] = CacheNode[K, V]{Key: n.key, Value: n.val, ParentKey: n.parentKey()}
 		c.lruList.MoveToFront(n.lruElem)
 	}
+
+	c.stats.IncHits()
 
 	return branch
 }
@@ -293,6 +348,7 @@ func (c *Cache[K, V]) TraverseToRoot(key K, f func(key K, val V, parentKey K)) {
 
 	node, exists := c.keysMap[key]
 	if !exists {
+		c.stats.IncMisses()
 		return
 	}
 
@@ -310,6 +366,8 @@ func (c *Cache[K, V]) TraverseToRoot(key K, f func(key K, val V, parentKey K)) {
 		}
 		f(n.key, n.val, parentKey)
 	}
+
+	c.stats.IncHits()
 }
 
 // TraverseSubtreeOption represents options for the TraverseSubtree method.
@@ -347,6 +405,7 @@ func (c *Cache[K, V]) TraverseSubtree(key K, f func(key K, val V, parentKey K), 
 
 	node, exists := c.keysMap[key]
 	if !exists {
+		c.stats.IncMisses()
 		return
 	}
 
@@ -383,6 +442,8 @@ func (c *Cache[K, V]) TraverseSubtree(key K, f func(key K, val V, parentKey K), 
 		}
 	}
 	traverse(node, 0) // Start at depth 0 (root of subtree)
+
+	c.stats.IncHits()
 }
 
 // Remove deletes a node and all its descendants from the cache.
@@ -413,13 +474,15 @@ func (c *Cache[K, V]) Remove(key K) (removedCount int) {
 
 	node.removeFromParent()
 
+	c.stats.SetAmount(len(c.keysMap))
+
 	return removedCount
 }
 
-func (c *Cache[K, V]) evict() {
+func (c *Cache[K, V]) evict() (CacheNode[K, V], bool) {
 	tailElem := c.lruList.Back()
 	if tailElem == nil {
-		return
+		return CacheNode[K, V]{}, false
 	}
 
 	c.lruList.Remove(tailElem)
@@ -428,7 +491,13 @@ func (c *Cache[K, V]) evict() {
 	delete(c.keysMap, node.key)
 	node.removeFromParent()
 
-	if c.onEvict != nil {
-		c.onEvict(CacheNode[K, V]{Key: node.key, Value: node.val, ParentKey: parentKey})
-	}
+	return CacheNode[K, V]{Key: node.key, Value: node.val, ParentKey: parentKey}, true
 }
+
+// nullStats is a null object implementation of the StatsCollector interface.
+type nullStats struct{}
+
+func (ns nullStats) SetAmount(int)    {}
+func (ns nullStats) IncHits()         {}
+func (ns nullStats) IncMisses()       {}
+func (ns nullStats) AddEvictions(int) {}
