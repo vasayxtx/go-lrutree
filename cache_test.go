@@ -1,11 +1,10 @@
 package lrutree
 
 import (
-	"errors"
 	"fmt"
-	"reflect"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -717,47 +716,273 @@ func getLRUOrder[K comparable, V any](c *Cache[K, V]) []K {
 	return keys
 }
 
-func assertEqual(t *testing.T, expected, actual interface{}) {
-	t.Helper()
-	if !reflect.DeepEqual(expected, actual) {
-		t.Fatalf("Not equal: \nexpected: %v\nactual  : %v\n", expected, actual)
+// mockStats implements the StatsCollector interface for testing.
+type mockStats struct {
+	amount    atomic.Int32
+	hits      atomic.Int32
+	misses    atomic.Int32
+	evictions atomic.Int32
+}
+
+func (m *mockStats) SetAmount(val int) {
+	m.amount.Store(int32(val))
+}
+
+func (m *mockStats) IncHits() {
+	m.hits.Add(1)
+}
+
+func (m *mockStats) IncMisses() {
+	m.misses.Add(1)
+}
+
+func (m *mockStats) AddEvictions(val int) {
+	m.evictions.Add(int32(val))
+}
+
+// panicingStats implements StatsCollector but panics on every 2nd call
+type panicingStats struct {
+	calls atomic.Int32
+}
+
+func (p *panicingStats) SetAmount(val int) {
+	if p.calls.Add(1)%2 == 0 {
+		panic("SetAmount panic")
 	}
 }
 
-func assertNoError(t *testing.T, err error) {
-	t.Helper()
-	if err != nil {
-		t.Fatalf("Received unexpected error: %v\n", err)
+func (p *panicingStats) IncHits() {
+	if p.calls.Add(1)%2 == 0 {
+		panic("IncHits panic")
 	}
 }
 
-func assertErrorIs(t *testing.T, err, expectedErr error) {
-	t.Helper()
-	if err == nil {
-		t.Fatalf("Expected error: %v, got nil\n", expectedErr)
-	}
-	if !errors.Is(err, expectedErr) {
-		t.Fatalf("Expected error: %v, got: %v\n", expectedErr, err)
+func (p *panicingStats) IncMisses() {
+	if p.calls.Add(1)%2 == 0 {
+		panic("IncMisses panic")
 	}
 }
 
-func assertTrue(t *testing.T, value bool) {
-	t.Helper()
-	if !value {
-		t.Fatalf("Expected true but got false\n")
+func (p *panicingStats) AddEvictions(val int) {
+	if p.calls.Add(1)%2 == 0 {
+		panic("AddEvictions panic")
 	}
 }
 
-func assertFalse(t *testing.T, value bool) {
-	t.Helper()
-	if value {
-		t.Fatalf("Expected false but got true\n")
-	}
-}
+func TestCache_Stats(t *testing.T) {
+	t.Run("basic operations", func(t *testing.T) {
+		stats := &mockStats{}
+		cache := NewCache[string, int](5, WithStatsCollector[string, int](stats))
 
-func assertNil(t *testing.T, value interface{}) {
-	t.Helper()
-	if value != nil && !reflect.ValueOf(value).IsNil() {
-		t.Fatalf("Expected nil, got: %v\n", value)
-	}
+		// Test adding root and child nodes
+		assertNoError(t, cache.AddRoot("root", 1))
+		assertEqual(t, int32(1), stats.amount.Load())
+
+		assertNoError(t, cache.Add("child1", 2, "root"))
+		assertNoError(t, cache.Add("child2", 3, "root"))
+		assertEqual(t, int32(3), stats.amount.Load())
+
+		// Test hits and misses
+		_, ok := cache.Get("child1")
+		assertTrue(t, ok)
+		assertEqual(t, int32(1), stats.hits.Load())
+
+		_, ok = cache.Get("nonexistent")
+		assertFalse(t, ok)
+		assertEqual(t, int32(1), stats.misses.Load())
+
+		// Test Peek
+		_, ok = cache.Peek("child2")
+		assertTrue(t, ok)
+		assertEqual(t, int32(2), stats.hits.Load())
+
+		_, ok = cache.Peek("nonexistent2")
+		assertFalse(t, ok)
+		assertEqual(t, int32(2), stats.misses.Load())
+	})
+
+	t.Run("eviction", func(t *testing.T) {
+		var lastEvicted *CacheNode[string, int]
+		onEvict := func(node CacheNode[string, int]) {
+			lastEvicted = &node
+		}
+
+		stats := &mockStats{}
+		cache := NewCache[string, int](3,
+			WithOnEvict(onEvict),
+			WithStatsCollector[string, int](stats),
+		)
+
+		// Setup the cache
+		assertNoError(t, cache.AddRoot("root", 1))
+		assertNoError(t, cache.Add("child1", 2, "root"))
+		assertNoError(t, cache.Add("child2", 3, "root"))
+		assertEqual(t, int32(3), stats.amount.Load())
+		assertEqual(t, int32(0), stats.evictions.Load())
+
+		// This should cause eviction
+		assertNoError(t, cache.Add("child3", 4, "root"))
+		assertEqual(t, int32(3), stats.amount.Load()) // Still 3 items
+		assertEqual(t, "child1", lastEvicted.Key)     // child1 was evicted
+
+		// Update LRU order and add another node to cause another eviction
+		_, ok := cache.Get("child2")
+		assertTrue(t, ok)
+		assertNoError(t, cache.Add("child4", 5, "root"))
+		assertEqual(t, "child3", lastEvicted.Key) // child3 should be evicted now
+	})
+
+	t.Run("subtree operations", func(t *testing.T) {
+		stats := &mockStats{}
+		cache := NewCache[string, int](10, WithStatsCollector[string, int](stats))
+
+		// Create a tree structure
+		assertNoError(t, cache.AddRoot("root", 1))
+		assertNoError(t, cache.Add("child1", 2, "root"))
+		assertNoError(t, cache.Add("child2", 3, "root"))
+		assertNoError(t, cache.Add("grandchild1", 4, "child1"))
+		assertNoError(t, cache.Add("grandchild2", 5, "child1"))
+
+		// Test branch traversal
+		branch := cache.GetBranch("grandchild1")
+		assertEqual(t, 3, len(branch)) // root -> child1 -> grandchild1
+		assertEqual(t, int32(1), stats.hits.Load())
+
+		// Test TraverseToRoot
+		cache.TraverseToRoot("grandchild2", func(key string, val int, parentKey string) {})
+		assertEqual(t, int32(2), stats.hits.Load())
+
+		// Test TraverseSubtree
+		cache.TraverseSubtree("child1", func(key string, val int, parentKey string) {})
+		assertEqual(t, int32(3), stats.hits.Load())
+
+		// Remove a subtree
+		removedCount := cache.Remove("child1")
+		assertEqual(t, 3, removedCount)               // child1, grandchild1, grandchild2
+		assertEqual(t, int32(2), stats.amount.Load()) // root and child2 left
+	})
+
+	t.Run("AddOrUpdate", func(t *testing.T) {
+		stats := &mockStats{}
+		cache := NewCache[string, int](5, WithStatsCollector[string, int](stats))
+
+		// Add root and child
+		assertNoError(t, cache.AddRoot("root", 1))
+		assertNoError(t, cache.AddOrUpdate("child1", 2, "root"))
+		assertEqual(t, int32(2), stats.amount.Load())
+
+		// Update existing node
+		assertNoError(t, cache.AddOrUpdate("child1", 3, "root"))
+		assertEqual(t, int32(2), stats.amount.Load()) // Count should stay the same
+
+		// Add more nodes to test eviction
+		for i := 2; i <= 5; i++ {
+			assertNoError(t, cache.AddOrUpdate("child"+string(rune('0'+i)), i+1, "root"))
+		}
+		assertEqual(t, int32(5), stats.amount.Load()) // At capacity
+	})
+
+	t.Run("null stats", func(t *testing.T) {
+		// Create cache without explicit stats
+		cache := NewCache[string, int](5)
+
+		// These operations should not panic
+		assertNoError(t, cache.AddRoot("root", 1))
+		assertNoError(t, cache.Add("child1", 2, "root"))
+		_, _ = cache.Get("child1")
+		_, _ = cache.Get("nonexistent")
+		_, _ = cache.Peek("child1")
+		_ = cache.GetBranch("child1")
+		cache.TraverseToRoot("child1", func(key string, val int, parentKey string) {})
+		cache.TraverseSubtree("root", func(key string, val int, parentKey string) {})
+		_ = cache.Remove("child1")
+
+		// Add nodes until eviction occurs
+		for i := 0; i < 10; i++ {
+			key := "node" + string(rune('0'+i))
+			_ = cache.Add(key, i, "root")
+		}
+
+		assertEqual(t, 5, cache.Len()) // Capacity is 5
+	})
+
+	t.Run("recovery from stats panic", func(t *testing.T) {
+		// Create a stats implementation that panics
+		panicStats := &panicingStats{}
+		cache := NewCache[string, int](10, WithStatsCollector[string, int](panicStats))
+
+		// Setup cache with some initial data
+		assertNoError(t, cache.AddRoot("root", 1))
+
+		// Test that we recover from panic in Add
+		func() {
+			defer func() {
+				r := recover()
+				assertEqual(t, "SetAmount panic", r.(string))
+			}()
+			_ = cache.Add("child1", 2, "root")
+		}()
+		// Cache should still be usable
+		assertNoError(t, cache.Add("child2", 3, "root"))
+
+		// Test we recover from panic in Get
+		func() {
+			defer func() {
+				r := recover()
+				assertEqual(t, "IncHits panic", r.(string))
+			}()
+			_, _ = cache.Get("child1")
+		}()
+		// Cache should still be usable
+		node, exists := cache.Get("child1")
+		assertTrue(t, exists)
+		assertEqual(t, 2, node.Value)
+
+		// Test we recover from panic in Get for non-existent key
+		func() {
+			defer func() {
+				r := recover()
+				assertEqual(t, "IncMisses panic", r.(string))
+			}()
+			_, _ = cache.Get("non-existent")
+		}()
+		// Cache should still be usable
+		_, exists = cache.Get("non-existent")
+		assertFalse(t, exists)
+
+		// Test that we recover from panic in GetBranch
+		func() {
+			defer func() {
+				r := recover()
+				assertEqual(t, "IncHits panic", r.(string))
+			}()
+			_ = cache.GetBranch("child2")
+		}()
+		// Cache should still be usable
+		branch := cache.GetBranch("child2")
+		assertEqual(t, 2, len(branch))
+
+		// Test that we recover from panic in AddOrUpdate
+		func() {
+			defer func() {
+				r := recover()
+				assertEqual(t, "SetAmount panic", r.(string))
+			}()
+			_ = cache.AddOrUpdate("child3", 4, "root")
+		}()
+		// Cache should still be usable
+		assertNoError(t, cache.AddOrUpdate("child3", 5, "root"))
+
+		// Test we recover from panic in Remove
+		func() {
+			defer func() {
+				r := recover()
+				assertEqual(t, "SetAmount panic", r.(string))
+			}()
+			_ = cache.Remove("child3")
+		}()
+		// Cache should still be usable
+		count := cache.Remove("child3")
+		assertEqual(t, 0, count)
+	})
 }
