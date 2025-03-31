@@ -301,6 +301,38 @@ func (c *Cache[K, V]) AddOrUpdate(key K, val V, parentKey K) error {
 	return nil
 }
 
+// PeekBranch returns the path from the root to the specified key as a slice of CacheNodes
+// without updating the LRU order.
+//
+// The returned slice is ordered from root (index 0) to the target node (last index).
+// If the key does not exist, an empty slice is returned.
+// Unlike GetBranch(), this method doesn't mark the nodes as recently used.
+func (c *Cache[K, V]) PeekBranch(key K) []CacheNode[K, V] {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	node, exists := c.keysMap[key]
+	if !exists {
+		c.stats.IncMisses()
+		return nil
+	}
+
+	depth := 0
+	for n := node; n != nil; n = n.parent {
+		depth++
+	}
+	branch := make([]CacheNode[K, V], depth)
+	i := depth
+	for n := node; n != nil; n = n.parent {
+		i--
+		branch[i] = CacheNode[K, V]{Key: n.key, Value: n.val, ParentKey: n.parentKey()}
+	}
+
+	c.stats.IncHits()
+
+	return branch
+}
+
 // GetBranch returns the path from the root to the specified key as a slice of BranchNodes.
 //
 // The returned slice is ordered from root (index 0) to the target node (last index).

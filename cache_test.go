@@ -319,6 +319,99 @@ func TestCache_GetBranch(t *testing.T) {
 	})
 }
 
+func TestCache_PeekBranch(t *testing.T) {
+	t.Run("key exists - lru order unchanged", func(t *testing.T) {
+		cache := NewCache[string, int](10)
+		assertNoError(t, cache.AddRoot("root", 10))
+		assertNoError(t, cache.Add("child1", 20, "root"))
+		assertNoError(t, cache.Add("grandchild1", 30, "child1"))
+		assertNoError(t, cache.Add("child2", 40, "root"))
+		assertNoError(t, cache.Add("grandchild2", 50, "child2"))
+
+		// Capture initial LRU order
+		initialOrder := getLRUOrder(cache)
+
+		// Peek the branch to grandchild1
+		branch := cache.PeekBranch("grandchild1")
+
+		// Verify branch content
+		assertEqual(t, []CacheNode[string, int]{
+			{Key: "root", Value: 10},
+			{Key: "child1", Value: 20, ParentKey: "root"},
+			{Key: "grandchild1", Value: 30, ParentKey: "child1"},
+		}, branch)
+
+		// Verify LRU order is unchanged
+		assertEqual(t, initialOrder, getLRUOrder(cache))
+	})
+
+	t.Run("key is root", func(t *testing.T) {
+		cache := NewCache[string, int](10)
+		assertNoError(t, cache.AddRoot("root", 10))
+		assertNoError(t, cache.Add("level1", 20, "root"))
+
+		// Capture initial LRU order
+		initialOrder := getLRUOrder(cache)
+
+		// Peek the branch to root
+		branch := cache.PeekBranch("root")
+
+		// Verify branch content
+		assertEqual(t, []CacheNode[string, int]{{Key: "root", Value: 10}}, branch)
+
+		// Verify LRU order is unchanged
+		assertEqual(t, initialOrder, getLRUOrder(cache))
+	})
+
+	t.Run("key doesn't exist", func(t *testing.T) {
+		cache := NewCache[string, int](10)
+		assertNoError(t, cache.AddRoot("root", 1))
+
+		// Capture initial LRU order
+		initialOrder := getLRUOrder(cache)
+
+		// Peek non-existent branch
+		branch := cache.PeekBranch("nonexistent")
+
+		// Verify branch is empty
+		assertEqual(t, 0, len(branch))
+
+		// Verify LRU order is unchanged
+		assertEqual(t, initialOrder, getLRUOrder(cache))
+	})
+
+	t.Run("empty cache", func(t *testing.T) {
+		cache := NewCache[string, int](10)
+
+		// Peek branch in empty cache
+		branch := cache.PeekBranch("anything")
+
+		// Verify branch is empty
+		assertEqual(t, 0, len(branch))
+	})
+
+	t.Run("stats tracking", func(t *testing.T) {
+		stats := &mockStats{}
+		cache := NewCache[string, int](10, WithStatsCollector[string, int](stats))
+		assertNoError(t, cache.AddRoot("root", 10))
+		assertNoError(t, cache.Add("child1", 20, "root"))
+		
+		// Initial stats counts should be 0
+		assertEqual(t, int32(0), stats.hits.Load())
+		assertEqual(t, int32(0), stats.misses.Load())
+		
+		// Test hit - peek a branch that exists
+		_ = cache.PeekBranch("child1")
+		assertEqual(t, int32(1), stats.hits.Load())
+		assertEqual(t, int32(0), stats.misses.Load())
+		
+		// Test miss - peek a branch that doesn't exist
+		_ = cache.PeekBranch("nonexistent")
+		assertEqual(t, int32(1), stats.hits.Load())
+		assertEqual(t, int32(1), stats.misses.Load())
+	})
+}
+
 func TestCache_TraverseToRoot(t *testing.T) {
 	t.Run("key not found", func(t *testing.T) {
 		cache := NewCache[string, int](10)
