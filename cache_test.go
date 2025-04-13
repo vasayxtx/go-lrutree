@@ -395,16 +395,16 @@ func TestCache_PeekBranch(t *testing.T) {
 		cache := NewCache[string, int](10, WithStatsCollector[string, int](stats))
 		assertNoError(t, cache.AddRoot("root", 10))
 		assertNoError(t, cache.Add("child1", 20, "root"))
-		
+
 		// Initial stats counts should be 0
 		assertEqual(t, int32(0), stats.hits.Load())
 		assertEqual(t, int32(0), stats.misses.Load())
-		
+
 		// Test hit - peek a branch that exists
 		_ = cache.PeekBranch("child1")
 		assertEqual(t, int32(1), stats.hits.Load())
 		assertEqual(t, int32(0), stats.misses.Load())
-		
+
 		// Test miss - peek a branch that doesn't exist
 		_ = cache.PeekBranch("nonexistent")
 		assertEqual(t, int32(1), stats.hits.Load())
