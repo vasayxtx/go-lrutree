@@ -102,6 +102,47 @@ More advanced usage example can be found in [example_test.go](./example_test.go)
 + The cache uses mutex locks for thread safety, which can impact performance under high concurrency.
 + For write-heavy workloads, consider using multiple caches with sharding.
 
+### Benchmarking
+
+The package includes [benchmarks](./cache_benchmark_test.go) to evaluate the performance of the LRU tree cache under various conditions.
+The following results were obtained on Apple M1 Max with Go 1.20:
+```
+BenchmarkCache_Get/depth=5/elements=50001-10                    13252944               89.38 ns/op
+BenchmarkCache_Get/depth=10/elements=100001-10                   5915546               201.7 ns/op
+BenchmarkCache_Get/depth=50/elements=500001-10                    847310                1331 ns/op
+BenchmarkCache_Peek/depth=5/elements=50001-10                   15514975               78.23 ns/op
+BenchmarkCache_Peek/depth=10/elements=100001-10                 14090122               95.83 ns/op
+BenchmarkCache_Peek/depth=50/elements=500001-10                  7754596               200.7 ns/op
+BenchmarkCache_GetBranch/depth=5/elements=50001-10               7374289               161.4 ns/op
+BenchmarkCache_GetBranch/depth=10/elements=100001-10             3946384               318.8 ns/op
+BenchmarkCache_GetBranch/depth=50/elements=500001-10              620029                2325 ns/op
+BenchmarkCache_PeekBranch/depth=5/elements=50001-10              6649334               188.6 ns/op
+BenchmarkCache_PeekBranch/depth=10/elements=100001-10            3969432               305.5 ns/op
+BenchmarkCache_PeekBranch/depth=50/elements=500001-10             578042                2308 ns/op
+BenchmarkCache_Add/depth=5-10                                    1631062               698.9 ns/op
+BenchmarkCache_Add/depth=10-10                                   1587628               734.6 ns/op
+BenchmarkCache_Add/depth=50-10                                    769306                1714 ns/op
+
+BenchmarkCache_Get_Concurrent/depth=5/goroutines=32-10           5557310               195.9 ns/op
+BenchmarkCache_Get_Concurrent/depth=5/goroutines=64-10           5450746               208.9 ns/op
+BenchmarkCache_Get_Concurrent/depth=5/goroutines=128-10          4809602               226.0 ns/op
+BenchmarkCache_Get_Concurrent/depth=10/goroutines=32-10          4208766               288.0 ns/op
+BenchmarkCache_Get_Concurrent/depth=10/goroutines=64-10          4313493               284.3 ns/op
+BenchmarkCache_Get_Concurrent/depth=10/goroutines=128-10         4019263               316.7 ns/op
+BenchmarkCache_Get_Concurrent/depth=50/goroutines=32-10           849674                1223 ns/op
+BenchmarkCache_Get_Concurrent/depth=50/goroutines=64-10          1033851                1174 ns/op
+BenchmarkCache_Get_Concurrent/depth=50/goroutines=128-10          950826                1231 ns/op
+BenchmarkCache_Peek_Concurrent/depth=5/goroutines=32-10          6772576               179.3 ns/op
+BenchmarkCache_Peek_Concurrent/depth=5/goroutines=64-10          6705830               177.4 ns/op
+BenchmarkCache_Peek_Concurrent/depth=5/goroutines=128-10         8474424               151.9 ns/op
+BenchmarkCache_Peek_Concurrent/depth=10/goroutines=32-10         7283060               142.4 ns/op
+BenchmarkCache_Peek_Concurrent/depth=10/goroutines=64-10         6966217               170.5 ns/op
+BenchmarkCache_Peek_Concurrent/depth=10/goroutines=128-10        6767965               150.1 ns/op
+BenchmarkCache_Peek_Concurrent/depth=50/goroutines=32-10         7615438               134.0 ns/op
+BenchmarkCache_Peek_Concurrent/depth=50/goroutines=64-10         9349428               158.0 ns/op
+BenchmarkCache_Peek_Concurrent/depth=50/goroutines=128-10        7689594               156.4 ns/op
+```
+
 ## License
 
 MIT License - see [LICENSE](./LICENSE) file for details.
