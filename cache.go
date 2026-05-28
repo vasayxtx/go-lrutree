@@ -506,6 +506,10 @@ func (c *Cache[K, V]) Remove(key K) (removedCount int) {
 
 	node.removeFromParent()
 
+	if node == c.root {
+		c.root = nil
+	}
+
 	c.stats.SetAmount(len(c.keysMap))
 
 	return removedCount
