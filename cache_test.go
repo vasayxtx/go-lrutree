@@ -208,6 +208,25 @@ func TestCache_Remove(t *testing.T) {
 		assertEqual(t, 0, len(getLRUOrder(cache)))
 	})
 
+	t.Run("re-initializing cache after removing root node", func(t *testing.T) {
+		cache := NewCache[string, int](10)
+		assertNoError(t, cache.AddRoot("root-1", 1))
+		assertNoError(t, cache.Add("child-1", 2, "root-1"))
+
+		removedCount := cache.Remove("root-1")
+		assertEqual(t, 2, removedCount)
+		assertEqual(t, 0, cache.Len())
+
+		// After removing the root, the cache must allow installing a new root
+		// and adding children under it. Without the c.root reset in Remove,
+		// AddRoot would return ErrRootAlreadyExists and Add would return
+		// ErrParentNotExist, leaving the cache permanently unusable.
+		assertNoError(t, cache.AddRoot("root-2", 10))
+		assertNoError(t, cache.Add("child-2", 20, "root-2"))
+		assertEqual(t, 2, cache.Len())
+		assertEqual(t, []string{"root-2", "child-2"}, getLRUOrder(cache))
+	})
+
 	t.Run("removing non-existent node", func(t *testing.T) {
 		cache := NewCache[string, int](10)
 		assertNoError(t, cache.AddRoot("root", 1))
